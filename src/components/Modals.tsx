@@ -229,7 +229,7 @@ export function PwaInstallPrompt({ onInstalled }: { onInstalled?: () => void }) 
 
         <div className="flex items-start gap-4 mb-4">
           <div className="w-14 h-14 rounded-xl flex items-center justify-center shrink-0 border border-white/15 shadow-[0_0_20px_rgba(255,34,56,0.35)] relative overflow-hidden" style={{ background: "linear-gradient(135deg, #1c2233 0%, #0d0f18 100%)" }}>
-            <img src="/icons/icon.svg" alt="ULTRON Icon" className="w-10 h-10 object-contain drop-shadow-[0_0_8px_rgba(255,34,56,0.8)]" />
+            <img src="./icons/icon.svg" alt="ULTRON Icon" className="w-10 h-10 object-contain drop-shadow-[0_0_8px_rgba(255,34,56,0.8)]" />
             <div className="absolute -bottom-1 -right-1 px-1.5 py-0.5 rounded bg-[#00d2ff] text-black font-mono font-bold text-[8px] uppercase tracking-wider">
               PWA
             </div>

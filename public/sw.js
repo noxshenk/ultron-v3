@@ -1,11 +1,11 @@
 const CACHE_NAME = "ultron-pwa-v1";
 const PRECACHE_ASSETS = [
-  "/",
-  "/index.html",
-  "/manifest.json",
-  "/icons/icon.svg",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png"
+  "./",
+  "./index.html",
+  "./manifest.json",
+  "./icons/icon.svg",
+  "./icons/icon-192.png",
+  "./icons/icon-512.png"
 ];
 
 // Install: pre-cache application shell
@@ -72,7 +72,7 @@ self.addEventListener("fetch", (event) => {
           }
           return response;
         })
-        .catch(() => caches.match("/index.html") || caches.match("/"))
+        .catch(() => caches.match("./index.html") || caches.match("./"))
     );
     return;
   }
