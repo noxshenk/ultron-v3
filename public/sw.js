@@ -40,6 +40,17 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
+  // Bypass in development (localhost/127.0.0.1) or Vite dev server requests
+  if (
+    self.location.hostname === "localhost" ||
+    self.location.hostname === "127.0.0.1" ||
+    url.pathname.startsWith("/@") ||
+    url.pathname.startsWith("/src/") ||
+    url.pathname.includes("vite")
+  ) {
+    return;
+  }
+
   // Bypass external downloads (e.g. AI model weights, huggingface, cdn)
   if (!url.origin.includes(self.location.origin)) {
     return;

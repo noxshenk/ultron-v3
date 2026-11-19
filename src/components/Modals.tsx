@@ -14,7 +14,7 @@ export function Icon({ name, className = "", style }: { name: string; className?
   );
 }
 
-export const modalCardStyle: CSSProperties = {
+const modalCardStyle: CSSProperties = {
   background: "linear-gradient(145deg, #0e121b 0%, #07090e 100%)",
   border: "1px solid rgba(255, 255, 255, 0.06)",
   boxShadow:
@@ -129,7 +129,7 @@ function usePwaInstall() {
       const isStand =
         window.matchMedia("(display-mode: standalone)").matches ||
         (window.navigator as unknown as { standalone?: boolean }).standalone === true ||
-        document.referrer.includes("android-app://");
+        (document.referrer || "").includes("android-app://");
       setIsStandalone(Boolean(isStand));
     };
 

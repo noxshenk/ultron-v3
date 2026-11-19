@@ -90,7 +90,7 @@ const DEFAULT_PROFILE: Profile = {
 };
 
 export default function App() {
-  const [profile, setProfile] = useState<Profile>(() => loadProfile() || DEFAULT_PROFILE);
+  const [profile, setProfile] = useState<Profile>(() => ({ ...DEFAULT_PROFILE, ...(loadProfile() || {}) }));
   const [settings, setSettings] = useState<Settings>(() => ({ ...DEFAULT_SETTINGS, ...loadSettings() }));
   const [sessions, setSessions] = useState<Session[]>(() => loadSessions());
   const [activeId, setActiveId] = useState<string>(() => {
@@ -132,7 +132,7 @@ export default function App() {
   const booted = useRef(false);
   const bw = useRef({ t: 0, loaded: 0, ema: 0 });
 
-  const persona = PERSONAS[settings.persona];
+  const persona = PERSONAS[settings.persona] || PERSONAS.jarvis;
   const current = sessions.find((s) => s.id === activeId);
   const messages = current?.messages ?? [];
   const asr = speechRecognitionSupported();
@@ -490,7 +490,7 @@ export default function App() {
   const eqActive = orbMode !== "idle";
   const eqSpeed = orbMode === "idle" ? "0.85s" : orbMode === "thinking" ? "0.35s" : "0.5s";
   const lastIsStreaming = generating && messages.length > 0 && messages[messages.length - 1].role === "assistant";
-  const accents = ACCENTS[settings.persona];
+  const accents = ACCENTS[settings.persona] || ACCENTS.jarvis;
   const sessionCount = useMemo(() => sessions.filter((s) => s.messages.length > 0).length, [sessions]);
 
   const modelChip = (() => {
