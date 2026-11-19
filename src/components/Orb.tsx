@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass }     from "three/examples/jsm/postprocessing/RenderPass.js";
@@ -11,6 +11,18 @@ interface Props {
   accent: string;
   secondary: string;
   mode: OrbMode;
+}
+
+/* ------------------------------------------------------------------ */
+/* Device capability & performance detection                          */
+/* ------------------------------------------------------------------ */
+function detectIsLowEnd(): boolean {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+  const lowCores = typeof navigator.hardwareConcurrency === "number" && navigator.hardwareConcurrency <= 4;
+  const lowMem = typeof (navigator as any).deviceMemory === "number" && (navigator as any).deviceMemory <= 4;
+  return isMobile || lowCores || lowMem;
 }
 
 /* ------------------------------------------------------------------ */
@@ -64,8 +76,7 @@ float snoise(vec3 v){
   return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
 }
 `;
-/* Shared plate field: domain-warped simplex noise. Its zero-crossings form a
-   maze of thin channels that split the shell into rounded "coral" plates. */
+
 const FIELD_GLSL = /* glsl */ `
 uniform float uTime;
 uniform float uSpeed;
@@ -78,7 +89,6 @@ float plateField(vec3 p) {
     snoise(q + vec3(8.3, 2.8, 4.1)),
     snoise(q + vec3(3.1, 5.7, 7.3)));
   float f = abs(snoise(q * 1.2 + w * 0.6));
-  // scattered round pores that open straight onto the glowing core
   float pore = snoise(p * 3.4 - vec3(t * 0.05) );
   f = min(f, smoothstep(-0.78, -0.45, pore) * 1.0);
   return f;
@@ -88,7 +98,6 @@ float plateHeight(float f) {
 }
 `;
 
-/* Outer shell: plates bulge outward from the base radius, normals rebuilt */
 const SHELL_VERT = /* glsl */ `
 uniform float uLift;
 uniform float uExpand;
@@ -99,7 +108,6 @@ ${NOISE_GLSL}
 ${FIELD_GLSL}
 vec3 shellPoint(vec3 dir) {
   float h = plateHeight(plateField(dir));
-  // pillow profile: rounded top, steep edges
   float pillow = sqrt(h);
   return dir * (1.5 + uExpand + pillow * uLift);
 }
@@ -142,57 +150,42 @@ void main() {
   vec3 n = normalize(vViewNormal);
   vec3 v = normalize(-vViewPos);
 
-  // If back face (inside wall seen through crack openings):
   if (!gl_FrontFacing) {
-    // Back of plates illuminated by the glowing core inside
     vec3 inner = uColorAccent * 0.45 * (0.8 + uPulse * 0.5);
     gl_FragColor = vec4(inner, 1.0);
     return;
   }
 
-  // Ensure normal points toward viewer for crisp front shading
   if (dot(n, v) < 0.0) n = -n;
 
-  /* ---- AMBIENT OCCLUSION & CAVITY SHADOWS ---- */
   float ao = smoothstep(0.0, 0.45, edge);
-
-  /* ---- DIRECTIONAL KEY LIGHT (Upper-Left Key) ---- */
   vec3 Lkey = normalize(vec3(-0.55, 0.8, 0.65));
   float NdotL = dot(n, Lkey);
-  // Realistic PBR diffuse falloff with smooth shadow terminator
   float diffKey = smoothstep(-0.15, 0.65, NdotL);
   float keyShadow = smoothstep(-0.25, 0.35, NdotL);
 
-  /* ---- FILL LIGHT (Cool secondary bounce from bottom-right) ---- */
   vec3 Lfill = normalize(vec3(0.5, -0.6, -0.2));
   float NdotLFill = max(0.0, dot(n, Lfill));
   float diffFill = NdotLFill * 0.22;
 
-  /* ---- DARK OBSIDIAN / GRAPHITE ARMOR BODY ---- */
-  // Ambient base on dark plates
   vec3 ambient = uShell * 0.35 * ao;
-  // Key diffuse illuminated body
   vec3 diffuse = uShell * (diffKey * 0.85 + diffFill) * ao;
   vec3 col = ambient + diffuse;
 
-  /* ---- SPECULAR HIGHLIGHTS (Subtle glossy glint on dark armor) ---- */
   vec3 H = normalize(Lkey + v);
   float nh = max(dot(n, H), 0.0);
   float specSharp = pow(nh, 90.0) * 0.75;
   float specSoft  = pow(nh, 20.0) * 0.15;
   col += (vec3(specSharp) + uColorLight * specSoft) * keyShadow * ao * 0.45;
 
-  /* ---- SUBSURFACE TRANSMISSION (Core light bleeding through thinning plate edges) ---- */
   float sssMask = pow(1.0 - edge, 2.5);
   vec3 sssColor = mix(uColorAccent, uColorLight, 0.35);
   col += sssColor * sssMask * (0.55 + uGlow * 0.35 + uPulse * 0.25);
 
-  /* ---- INCANDESCENT CORE CRACK SEAMS (Light bursting from under the armor) ---- */
   float crack = smoothstep(0.16, 0.0, edge);
   vec3 crackGlow = mix(uColorAccent * 2.2, vec3(1.0), crack * 0.4);
   col += crackGlow * crack * (0.9 + uPulse * 0.7);
 
-  /* ---- SUBTLE FRESNEL EDGE ---- */
   float NdotV = clamp(dot(n, v), 0.0, 1.0);
   float fresnel = pow(1.0 - NdotV, 3.5);
   col += uColorAccent * fresnel * 0.35 * ao;
@@ -201,7 +194,6 @@ void main() {
 }
 `;
 
-/* Glowing inner core */
 const CORE_VERT = /* glsl */ `
 varying vec3 vObj;
 varying vec3 vViewNormal;
@@ -239,15 +231,12 @@ void main() {
 
   float sparks = smoothstep(0.68, 0.96, snoise(vObj * 4.5 - vec3(t * 0.6)));
 
-  // Rich, controlled core with subtle internal plasma filaments
   vec3 col = mix(uColorDeep * 0.3, uColorAccent * 0.95, smoothstep(-0.4, 0.5, totalSwirl));
   col = mix(col, uColorLight * 1.25, pow(facing, 3.2) * 0.45 + sparks * 0.5);
 
-  // Deep shadow folds across turbulent plasma
   float shadowPockets = smoothstep(-0.7, 0.3, totalSwirl);
   col *= (0.3 + 0.7 * shadowPockets);
 
-  // Limb darkening to give real spherical depth
   float limb = pow(1.0 - facing, 2.5);
   col = mix(col, uColorDeep * 0.15, limb * 0.85);
 
@@ -255,7 +244,6 @@ void main() {
 }
 `;
 
-/* Glass bubbles drifting around the orb */
 const BUBBLE_VERT = /* glsl */ `
 varying vec3 vViewNormal;
 varying vec3 vViewPos;
@@ -285,7 +273,6 @@ void main() {
 }
 `;
 
-/* Soft radial halo rendered behind the orb */
 const HALO_VERT = /* glsl */ `
 varying vec2 vUv;
 void main() {
@@ -306,17 +293,16 @@ void main() {
 }
 `;
 
-/* Per-mode animation targets ------------------------------------------ */
 interface OrbTuning {
-  gap: number;      // channel width between plates
-  lift: number;     // plate thickness
-  expand: number;   // shell pushed away from the core
-  speed: number;    // how fast the plate pattern morphs
-  glow: number;     // edge glow strength
-  core: number;     // core brightness
-  breathe: number;  // scale breathing
-  spin: number;     // self rotation
-  halo: number;     // halo opacity
+  gap: number;
+  lift: number;
+  expand: number;
+  speed: number;
+  glow: number;
+  core: number;
+  breathe: number;
+  spin: number;
+  halo: number;
   haloScale: number;
 }
 
@@ -346,6 +332,8 @@ export default function Orb({ accent, secondary, mode }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const modeRef = useRef<OrbMode>(mode);
   const colorsRef = useRef({ accent, secondary });
+  const [webGlOk, setWebGlOk] = useState(true);
+
   modeRef.current = mode;
   colorsRef.current = { accent, secondary };
 
@@ -353,8 +341,25 @@ export default function Orb({ accent, secondary, mode }: Props) {
     const el = host.current;
     if (!el) return;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const isLowEnd = detectIsLowEnd();
+
+    // Safe WebGL initialization with crash guard
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: !isLowEnd,
+        alpha: true,
+        powerPreference: isLowEnd ? "low-power" : "default",
+        precision: isLowEnd ? "mediump" : "highp",
+      });
+    } catch {
+      setWebGlOk(false);
+      return;
+    }
+
+    // Clamp pixel ratio: on low-end/mobile phones DPR 1.0 prevents GPU memory crashes
+    const targetDpr = isLowEnd ? 1.0 : Math.min(window.devicePixelRatio || 1, 1.5);
+    renderer.setPixelRatio(targetDpr);
     renderer.setClearColor(0x000000, 0);
     renderer.toneMapping = THREE.ReinhardToneMapping;
     renderer.toneMappingExposure = 1.0;
@@ -367,26 +372,33 @@ export default function Orb({ accent, secondary, mode }: Props) {
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
     camera.position.z = 5.8;
 
-    /* ---------- bloom post-processing ---------- */
-    const composer = new EffectComposer(renderer);
-    const renderPass = new RenderPass(scene, camera);
-    composer.addPass(renderPass);
-
-    const bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(el.clientWidth || 300, el.clientHeight || 300),
-      1.1,   // strength
-      0.35,  // radius
-      0.45,  // threshold — only incandescent cracks & core bloom, dark plates remain crisp!
-    );
-    composer.addPass(bloomPass);
-    composer.addPass(new OutputPass());
+    // Post-processing bloom only on desktop/capable hardware to save mobile GPU memory
+    let composer: EffectComposer | null = null;
+    let bloomPass: UnrealBloomPass | null = null;
+    if (!isLowEnd) {
+      try {
+        composer = new EffectComposer(renderer);
+        const renderPass = new RenderPass(scene, camera);
+        composer.addPass(renderPass);
+        bloomPass = new UnrealBloomPass(
+          new THREE.Vector2(el.clientWidth || 300, el.clientHeight || 300),
+          1.05,
+          0.35,
+          0.45,
+        );
+        composer.addPass(bloomPass);
+        composer.addPass(new OutputPass());
+      } catch {
+        composer = null;
+        bloomPass = null;
+      }
+    }
 
     const group = new THREE.Group();
     scene.add(group);
 
     const accentC = new THREE.Color(accent);
     const lightC = accentC.clone().lerp(WHITE, 0.6);
-    // Dark armor plate body with subtle persona tint
     const shellC = DARK_SHELL.clone().lerp(accentC, 0.12);
 
     /* ---------- soft halo behind the orb ---------- */
@@ -405,10 +417,11 @@ export default function Orb({ accent, secondary, mode }: Props) {
     });
     const halo = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), haloMat);
     halo.renderOrder = -1;
-    scene.add(halo); // stays camera-facing, outside the drag-rotated group
+    scene.add(halo);
 
-    /* ---------- glowing core ---------- */
-    const coreGeo = new THREE.SphereGeometry(1.32, 64, 48);
+    /* ---------- glowing inner core (dynamic LOD for low-end) ---------- */
+    const coreSegs = isLowEnd ? [28, 20] : [48, 36];
+    const coreGeo = new THREE.SphereGeometry(1.32, coreSegs[0], coreSegs[1]);
     const coreUniforms = {
       uTime: { value: 0 },
       uSpeed: { value: TUNING.idle.speed },
@@ -421,8 +434,9 @@ export default function Orb({ accent, secondary, mode }: Props) {
     const core = new THREE.Mesh(coreGeo, coreMat);
     group.add(core);
 
-    /* ---------- porcelain coral shell ---------- */
-    const shellGeo = new THREE.SphereGeometry(1, 180, 130); // indexed: far fewer vertex-shader runs than an icosphere
+    /* ---------- porcelain coral shell (dynamic LOD: 64x48 on mobile vs 130x96) ---------- */
+    const shellSegs = isLowEnd ? [64, 48] : [130, 96];
+    const shellGeo = new THREE.SphereGeometry(1, shellSegs[0], shellSegs[1]);
     const shellUniforms = {
       uTime: { value: 0 },
       uSpeed: { value: TUNING.idle.speed },
@@ -445,9 +459,9 @@ export default function Orb({ accent, secondary, mode }: Props) {
     group.add(shell);
 
     /* ---------- drifting glass bubbles ---------- */
-    const BUBBLES = 26;
-    const bubbles: Bubble[] = Array.from({ length: BUBBLES }, (_, i) => ({
-      angle: (i / BUBBLES) * Math.PI * 2 + Math.random() * 0.6,
+    const BUBBLE_COUNT = isLowEnd ? 12 : 24;
+    const bubbles: Bubble[] = Array.from({ length: BUBBLE_COUNT }, (_, i) => ({
+      angle: (i / BUBBLE_COUNT) * Math.PI * 2 + Math.random() * 0.6,
       radius: 2.65 + Math.random() * 1.3,
       y: -1.9 + Math.random() * 3.6,
       z: Math.random() * 0.8 - 0.4,
@@ -456,7 +470,7 @@ export default function Orb({ accent, secondary, mode }: Props) {
       bob: 0.06 + Math.random() * 0.14,
       phase: Math.random() * Math.PI * 2,
     }));
-    const bubbleGeo = new THREE.SphereGeometry(1, 20, 14);
+    const bubbleGeo = new THREE.SphereGeometry(1, isLowEnd ? 10 : 16, isLowEnd ? 8 : 12);
     const bubbleUniforms = {
       uColorAccent: { value: accentC.clone() },
       uColorLight: { value: lightC.clone() },
@@ -469,12 +483,11 @@ export default function Orb({ accent, secondary, mode }: Props) {
       transparent: true,
       depthWrite: false,
     });
-    const bubbleMesh = new THREE.InstancedMesh(bubbleGeo, bubbleMat, BUBBLES);
+    const bubbleMesh = new THREE.InstancedMesh(bubbleGeo, bubbleMat, BUBBLE_COUNT);
     bubbleMesh.frustumCulled = false;
     scene.add(bubbleMesh);
     const dummy = new THREE.Object3D();
 
-    /* halo plane sits right behind the orb as a localized soft glow */
     const fitHalo = () => {
       halo.scale.setScalar(5.2);
     };
@@ -505,16 +518,31 @@ export default function Orb({ accent, secondary, mode }: Props) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
 
+    /* ---------- WebGL Context Loss & Restore ---------- */
+    let isContextLost = false;
+    const onContextLost = (e: Event) => {
+      e.preventDefault();
+      isContextLost = true;
+    };
+    const onContextRestored = () => {
+      isContextLost = false;
+      resize();
+    };
+    renderer.domElement.addEventListener("webglcontextlost", onContextLost, false);
+    renderer.domElement.addEventListener("webglcontextrestored", onContextRestored, false);
+
     const resize = () => {
+      if (isContextLost) return;
       const w = el.clientWidth || 300;
       const h = el.clientHeight || 300;
       renderer.setSize(w, h, false);
-      composer.setSize(w, h);
-      bloomPass.resolution.set(w, h);
+      if (composer && bloomPass) {
+        composer.setSize(w, h);
+        bloomPass.resolution.set(w, h);
+      }
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       fitHalo();
-      // keep bubbles inside narrow viewports
       const spread = Math.min(1, camera.aspect / 1.6);
       bubbleSpread = 0.65 + spread * 0.35;
     };
@@ -523,7 +551,7 @@ export default function Orb({ accent, secondary, mode }: Props) {
     const ro = new ResizeObserver(resize);
     ro.observe(el);
 
-    /* ---------- animation loop ---------- */
+    /* ---------- animation loop with visibility throttling ---------- */
     const cur: OrbTuning = { ...TUNING.idle };
     let pulsePhase = 0;
     let morph = 0;
@@ -536,18 +564,18 @@ export default function Orb({ accent, secondary, mode }: Props) {
 
     const tick = () => {
       raf = requestAnimationFrame(tick);
-      const dt = Math.min(clock.getDelta(), 0.05);
+      if (isContextLost || document.hidden) return;
+
+      const dt = Math.min(clock.getDelta(), 0.04);
       const t = clock.elapsedTime;
       const m = modeRef.current;
       const target = TUNING[m];
 
-      // smooth transitions between modes
-      const k = 1 - Math.pow(0.0025, dt); // frame-rate independent smoothing
+      const k = 1 - Math.pow(0.0025, dt);
       (Object.keys(cur) as (keyof OrbTuning)[]).forEach((key) => {
         cur[key] = lerp(cur[key], target[key], k);
       });
 
-      // persona color cross-fade
       tmpAccent.set(colorsRef.current.accent);
       tmpSecondary.set(colorsRef.current.secondary);
       tmpLight.copy(tmpAccent).lerp(WHITE, 0.6);
@@ -562,7 +590,6 @@ export default function Orb({ accent, secondary, mode }: Props) {
       bubbleUniforms.uColorLight.value.lerp(tmpLight, k);
       haloUniforms.uColor.value.lerp(tmpAccent, k);
 
-      // speaking pulse: organic double-wave, otherwise slow breathing
       let pulse: number;
       if (m === "speaking") {
         pulsePhase += dt * 9.5;
@@ -572,7 +599,6 @@ export default function Orb({ accent, secondary, mode }: Props) {
         pulse = (Math.sin(pulsePhase) * 0.5 + 0.5) * 0.35;
       }
 
-      // accumulate morph time so speed changes never make the pattern jump
       morph += dt * cur.speed;
       shellUniforms.uTime.value = morph;
       shellUniforms.uSpeed.value = 1;
@@ -586,18 +612,15 @@ export default function Orb({ accent, secondary, mode }: Props) {
       shellUniforms.uPulse.value = pulse;
       coreUniforms.uIntensity.value = cur.core * (0.9 + pulse * 0.3);
 
-      // breathing scale, amplified while speaking
       const breathe = 1 + Math.sin(t * (m === "speaking" ? 5.2 : 1.4)) * cur.breathe;
       group.scale.setScalar(breathe);
 
-      // halo reaction — always billboarded to the camera; wider falloff when active
       halo.quaternion.copy(camera.quaternion);
       haloUniforms.uOpacity.value = cur.halo * (0.75 + pulse * 0.35);
       haloUniforms.uFalloff.value = 3.6 - (cur.haloScale - 1.5) * 2.2;
 
-      // bubbles orbit slowly and bob; they drift faster when the orb is active
       const drift = 0.6 + cur.glow;
-      for (let i = 0; i < BUBBLES; i++) {
+      for (let i = 0; i < BUBBLE_COUNT; i++) {
         const b = bubbles[i];
         b.angle += b.speed * dt * drift;
         const r = b.radius * bubbleSpread;
@@ -612,7 +635,6 @@ export default function Orb({ accent, secondary, mode }: Props) {
       }
       bubbleMesh.instanceMatrix.needsUpdate = true;
 
-      // gentle self-rotation + inertia from drag
       if (!dragging) {
         group.rotation.y += (cur.spin + velY) * dt * 8;
         group.rotation.x += velX * dt * 8;
@@ -620,10 +642,12 @@ export default function Orb({ accent, secondary, mode }: Props) {
         velY *= 0.92;
       }
 
-      // pulse bloom strength
-      bloomPass.strength = 0.85 + pulse * 0.3 + cur.glow * 0.2;
-
-      composer.render();
+      if (composer && bloomPass) {
+        bloomPass.strength = 0.85 + pulse * 0.3 + cur.glow * 0.2;
+        composer.render();
+      } else {
+        renderer.render(scene, camera);
+      }
     };
     tick();
 
@@ -631,6 +655,8 @@ export default function Orb({ accent, secondary, mode }: Props) {
       cancelAnimationFrame(raf);
       ro.disconnect();
       renderer.domElement.removeEventListener("pointerdown", down);
+      renderer.domElement.removeEventListener("webglcontextlost", onContextLost);
+      renderer.domElement.removeEventListener("webglcontextrestored", onContextRestored);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       shellGeo.dispose();
@@ -642,12 +668,32 @@ export default function Orb({ accent, secondary, mode }: Props) {
       bubbleMesh.dispose();
       halo.geometry.dispose();
       haloMat.dispose();
+      composer?.dispose();
       renderer.dispose();
-      composer.dispose();
       renderer.domElement.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (!webGlOk) {
+    // Ultra-lightweight CSS fallback orb if WebGL is unavailable on antique device
+    return (
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
+        <div
+          className="w-40 h-40 rounded-full flex items-center justify-center transition-all duration-500 relative"
+          style={{
+            background: `radial-gradient(circle at 35% 35%, ${accent} 0%, #10141f 70%, #06070a 100%)`,
+            boxShadow: `0 0 35px ${accent}40, inset 0 0 20px ${accent}80`,
+          }}
+        >
+          <div
+            className={`w-28 h-28 rounded-full border border-white/20 ${mode === "speaking" ? "animate-ping" : "animate-pulse"}`}
+            style={{ background: `radial-gradient(circle, ${accent}60 0%, transparent 70%)` }}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return <div ref={host} className="absolute inset-0" />;
 }
